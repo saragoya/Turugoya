@@ -6,157 +6,69 @@ import logging
 import atexit
 from datetime import datetime, timezone
 import psutil
-import yt_dlp
-from discord import FFmpegPCMAudio
+import asyncio
+import os
+from dotenv import load_dotenv
+import psutil
 
+# --- Intents設定 ---
 intents = discord.Intents.default()
 intents.message_content = True
 intents.messages = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
 bot_start_time = datetime.now(timezone.utc)
 
-
+# --- ログ設定 ---
 class ExcludeMessageLogsFilter(logging.Filter):
     def filter(self, record):
-        # "UserMessage" というタグが含まれるログはコンソールに表示しない
         return "UserMessage" not in record.getMessage()
 
 log_filename = f"bot_log_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
-
-# ファイルにはすべて記録
 file_handler = logging.FileHandler(log_filename, encoding='utf-8')
 file_handler.setLevel(logging.INFO)
 
-# コンソールには "UserMessage" を除外して出力
 console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 console_handler.addFilter(ExcludeMessageLogsFilter())
 
-# ロガー設定
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[file_handler, console_handler]
 )
 
-@bot.command(aliases=["ジャンケン", "じゃんけん"])
-async def janken(ctx, user_hand: str):
-    print(f"じゃんけん実行: {user_hand}")
-    hands = ['グー', 'チョキ', 'パー']
-    bot_hand = random.choice(hands)
-    print(f"Botの手: {bot_hand}")
+# --- 起動時イベント ---
+@bot.event
+async def on_ready():
+    print(f"✅ Bot Logged in as {bot.user}")
 
-    if user_hand not in hands:
-        await ctx.send("無効な手です!「グー」「チョキ」「パー」から選んでね。")
+# --- エラーハンドリング ---
+@bot.event
+async def on_command_error(ctx, error):
+    if re.fullmatch(r"!([1-9][0-9]*)d([1-9][0-9]*)", ctx.message.content.strip()):
         return
-
-    if user_hand == bot_hand:
-        result = "あいこ!"
-    elif (
-        (user_hand == "グー" and bot_hand == "チョキ") or
-        (user_hand == "チョキ" and bot_hand == "パー") or
-        (user_hand == "パー" and bot_hand == "グー")
-    ):
-        result = "あなたの勝ち!🎉"
+    if isinstance(error, commands.CommandNotFound):
+        await ctx.send("⚠️ 未知のコマンドです。`!bot_help`で使用可能なコマンドを確認してください。")
     else:
-        result = "Botの勝ち!"
+        raise error
 
-    print(f"結果: {result}")
-    await ctx.send(f"あなた: {user_hand} | Bot: {bot_hand}\n{result}")
+# --- ヘルプコマンド ---
+@bot.command(name='bot_help')
+async def help_command(ctx):
+    embed = discord.Embed(
+        title="🛠 コマンド一覧",
+        description="Botで使用可能なコマンドの一覧です。",
+        color=discord.Color.blue()
+    )
+    embed.add_field(name="🎵 音楽", value="`!play URL`, `!volume 数値`, `!join`, `!leave`, `!pause`, `!resume`, `!skip`,`!repeat`,`!queue`,`!stop`", inline=False)
+    embed.add_field(name="🎮 ミニゲーム", value="`!スロット`, `!じゃんけん グー/チョキ/パー`", inline=False)
+    embed.add_field(name="🎲 ダイス", value="`!AdB`形式でダイスロール（例：`!1d6`, `!3d10000`）", inline=False)
+    embed.add_field(name="📊 ステータス", value="`!status`：Botの応答速度やリソース情報", inline=False)
+    await ctx.send(embed=embed)
 
-
-@bot.command()
-async def join(ctx):
-    if ctx.author.voice:
-        await ctx.author.voice.channel.connect()
-        await ctx.send("ボイスチャンネルに参加しました。")
-    else:
-        await ctx.send("あなたはボイスチャンネルに参加していません。")
-
-@bot.command()
-async def leave(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
-        await ctx.send("切断しました。")
-    else:
-        await ctx.send("Botはボイスチャンネルに参加していません。")
-
-@bot.command()
-async def play_Y(ctx, *, url):
-    vc = ctx.voice_client
-    if not vc:
-        await ctx.send("先に `!join` でボイスチャンネルに参加させてください。")
-        return
-
-    ydl_opts = {
-        'format': 'bestaudio/best',
-        'quiet': True,
-        'noplaylist': True,
-    }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(url, download=False)
-        audio_url = info['url']
-        title = info.get("title", "（タイトル不明）")
-
-    ffmpeg_options = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn'
-    }
-
-    source = FFmpegPCMAudio(audio_url, **ffmpeg_options)
-    vc.play(source)
-
-    await ctx.send(f"再生中: {title}")
-
-@bot.command()
-async def stop(ctx):
-    vc = ctx.voice_client
-    if vc and vc.is_playing():
-        vc.stop()
-        await ctx.send("再生を停止しました。")
-    else:
-        await ctx.send("現在再生中の音声はありません。")
-
-@bot.command()
-async def pause(ctx):
-    vc = ctx.voice_client
-    if vc and vc.is_playing():
-        vc.pause()
-        await ctx.send("再生を一時停止しました。")
-    else:
-        await ctx.send("再生中の音声がありません。")
-
-@bot.command()
-async def resume(ctx):
-    vc = ctx.voice_client
-    if vc and vc.is_paused():
-        vc.resume()
-        await ctx.send("再生を再開しました。")
-    else:
-        await ctx.send("一時停止中の音声はありません。")
-
-@bot.command()
-async def スロット(ctx):
-    symbols = ['🍒', '🍋', '🍊', '🔔', '⭐', '7️⃣']
-    weights = [30, 25, 20, 15, 7, 3]
-    result = random.choices(symbols, weights=weights, k=3)
-    await ctx.send(f"| {' | '.join(result)} |")
-
-    counts = {sym: result.count(sym) for sym in symbols}
-    if counts['7️⃣'] == 3:
-        await ctx.send(f"🎉 ジャックポット!7️⃣が3つ揃ったよ!大当たり! {result}")
-    elif counts['7️⃣'] == 2:
-        await ctx.send(f"✨ ナイス!7️⃣が2つ揃った! {result}")
-    if result[0] == result[1] == result[2]:
-        await ctx.send("🎉 おめでとう!3つ揃いました!当たり!")
-    else:
-        await ctx.send("残念、揃いませんでした…また挑戦してね!")
-
-# ダイス正規表現
-dice_pattern = re.compile(r'^!(\d+)d(\d+)$')
-
+# --- メッセージ受信処理 ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -165,7 +77,6 @@ async def on_message(message):
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     author = f"{message.author.name}#{message.author.discriminator}"
 
-    # チャンネルの種類に応じて表示名を変える
     if isinstance(message.channel, discord.TextChannel):
         channel_name = f"#{message.channel.name}"
     elif isinstance(message.channel, discord.DMChannel):
@@ -173,40 +84,37 @@ async def on_message(message):
     elif isinstance(message.channel, discord.Thread):
         channel_name = f"🧵 {message.channel.name}"
     else:
-        channel_name = str(message.channel)  # fallback
+        channel_name = str(message.channel)
 
-    # CMD出力（カラー表示）
     print(f"\033[92m[{timestamp}]\033[0m \033[96m{author}\033[0m in \033[93m{channel_name}\033[0m: {message.content}")
-
-    # ログファイルに書き込み
     logging.info(f"[UserMessage] {timestamp} {author} in {channel_name}: {message.content}")
 
     # ダイス判定
-    match = dice_pattern.match(message.content)
-    if match:
-        count = int(match.group(1))
-        sides = int(match.group(2))
-        logging.info(f"{message.author} が !{count}d{sides} を使いました")
+    dice_match = re.fullmatch(r"!([1-9][0-9]*)d([1-9][0-9]*)", message.content.strip())
+    if dice_match:
+        count = int(dice_match.group(1))
+        sides = int(dice_match.group(2))
 
-        if count < 1 or count > 100:
-            await message.channel.send("⚠️ ダイスの数は1〜100個にしてください。")
+        if not (1 <= count <= 100):
+            await message.channel.send("⚠️ サイコロの数は1〜100個にしてください。")
             return
-        if sides < 1 or sides > 10000:
+        if not (1 <= sides <= 10000):
             await message.channel.send("⚠️ 面の数は1〜10000にしてください。")
             return
 
         rolls = [random.randint(1, sides) for _ in range(count)]
         total = sum(rolls)
         rolls_str = ', '.join(str(r) for r in rolls)
-        result = f"🎲 {sides}面ダイスを{count}個振りました！\n出目: [{rolls_str}]\n合計: **{total}**"
 
-        await message.channel.send(result)
-        logging.info(result)
+        await message.channel.send(
+            f"🎲 {sides}面ダイスを{count}個振りました！\n"
+            f"出目: [{rolls_str}]\n合計: **{total}**"
+        )
         return
 
-    # 他のコマンドも通す
     await bot.process_commands(message)
 
+# --- ステータスコマンド ---
 @bot.command()
 async def status(ctx):
     start_time = discord.utils.utcnow()
@@ -229,7 +137,7 @@ async def status(ctx):
     embed = discord.Embed(
         title="📊 Botステータス",
         color=discord.Color.green(),
-        timestamp = datetime.now(timezone.utc)
+        timestamp=datetime.now(timezone.utc)
     )
     embed.add_field(name="📡 API応答速度", value=f"{api_latency:.2f}ms", inline=True)
     embed.add_field(name="🔌 WebSocket遅延", value=f"{websocket_latency:.2f}ms", inline=True)
@@ -244,9 +152,39 @@ async def status(ctx):
 
     await msg.edit(content=None, embed=embed)
 
+
+# --- 終了ログ ---
 def on_exit():
     logging.info("Bot has finished. Log saved.")
-
 atexit.register(on_exit)
 
-bot.run('MTM3MzM2MTAxNTgxNDc1NDQwNQ.GaZGJg.RPMHv-k9KctipmZFZyd0wBNwwYlGVjeUAchxTw')
+# --- 起動処理 ---
+import os
+import logging
+from dotenv import load_dotenv
+
+async def main():
+    load_dotenv()
+
+    TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    
+    if TOKEN:  # ← 修正
+        print("✅ トークンを読み込みました:", TOKEN[:10], "...")
+    else:
+        print("❌ トークンが読み込めませんでした。")
+        return  # トークンがない場合はここで終了した方が安全
+
+    async with bot:
+        try:
+            await bot.load_extension("minigames")
+            await bot.load_extension("music_youtube")
+            await bot.load_extension("host_info")
+        except Exception as e:
+            logging.error(f"拡張の読み込みに失敗: {e}")
+        await bot.start(TOKEN)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("[PCからの入力によりBotが停止しました。正常に停止できました。]")
