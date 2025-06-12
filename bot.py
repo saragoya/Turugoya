@@ -1,7 +1,7 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import random
-import re
 import logging
 import atexit
 from datetime import datetime, timezone
@@ -9,7 +9,6 @@ import psutil
 import asyncio
 import os
 from dotenv import load_dotenv
-import psutil
 
 # --- Intents設定 ---
 intents = discord.Intents.default()
@@ -17,7 +16,8 @@ intents.message_content = True
 intents.messages = True
 intents.voice_states = True
 
-bot = commands.Bot(command_prefix='!', intents=discord.Intents.all())
+# プレフィックス無しのBot（スラッシュコマンド用）
+bot = commands.Bot(command_prefix=None, intents=intents)
 bot_start_time = datetime.now(timezone.utc)
 
 # --- ログ設定 ---
@@ -43,82 +43,66 @@ logging.basicConfig(
 @bot.event
 async def on_ready():
     print(f"✅ Bot Logged in as {bot.user}")
+    # スラッシュコマンドをDiscordに登録（全ギルド or グローバル）
+    try:
+        synced = await bot.tree.sync()
+        print(f"🔄 {len(synced)}個のスラッシュコマンドを同期しました。")
+    except Exception as e:
+        print(f"❌ スラッシュコマンドの同期に失敗しました: {e}")
 
 # --- エラーハンドリング ---
-@bot.event
-async def on_command_error(ctx, error):
-    if re.fullmatch(r"!([1-9][0-9]*)d([1-9][0-9]*)", ctx.message.content.strip()):
-        return
-    if isinstance(error, commands.CommandNotFound):
-        await ctx.send("⚠️ 未知のコマンドです。`!bot_help`で使用可能なコマンドを確認してください。")
+@bot.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    # コマンドが見つからないエラーは通常は起きにくいですが念のため
+    if isinstance(error, app_commands.CommandNotFound):
+        await interaction.response.send_message("⚠️ 未知のコマンドです。", ephemeral=True)
     else:
-        raise error
+        logging.error(f"スラッシュコマンドエラー: {error}")
+        # エラー内容をユーザーに簡単に通知
+        try:
+            await interaction.response.send_message(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+        except Exception:
+            pass
 
-# --- ヘルプコマンド ---
-@bot.command(name='bot_help')
-async def help_command(ctx):
+# --- ヘルプコマンド（スラッシュ） ---
+@bot.tree.command(name="bot_help", description="使用可能なコマンド一覧を表示します")
+async def bot_help(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🛠 コマンド一覧",
         description="Botで使用可能なコマンドの一覧です。",
         color=discord.Color.blue()
     )
-    embed.add_field(name="🎵 音楽", value="`!play URL`, `!volume 数値`, `!join`, `!leave`, `!pause`, `!resume`, `!skip`,`!repeat`,`!queue`,`!stop`", inline=False)
-    embed.add_field(name="🎮 ミニゲーム", value="`!スロット`, `!じゃんけん グー/チョキ/パー`", inline=False)
-    embed.add_field(name="🎲 ダイス", value="`!AdB`形式でダイスロール（例：`!1d6`, `!3d10000`）", inline=False)
-    embed.add_field(name="📊 ステータス", value="`!status`：Botの応答速度やリソース情報", inline=False)
-    await ctx.send(embed=embed)
+    embed.add_field(name="🎵 音楽", value="`/play URL`, `/volume 数値`, `/join`, `/leave`, `/pause`, `/resume`, `/skip`,`/repeat`,`/queue`,`/stop`", inline=False)
+    embed.add_field(name="🎮 ミニゲーム", value="`/slot`, `/janken グー/チョキ/パー`", inline=False)
+    embed.add_field(name="🎲 ダイス", value="`/dice 個数 面数`形式でダイスロール（例：`/dice count:3 sides:6`）", inline=False)
+    embed.add_field(name="📊 ステータス", value="`/status`：Botの応答速度やリソース情報", inline=False)
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# --- メッセージ受信処理 ---
-@bot.event
-async def on_message(message):
-    if message.author.bot:
+# --- ダイスコマンド（スラッシュ） ---
+@bot.tree.command(name="dice", description="指定した個数・面数のダイスを振ります")
+@app_commands.describe(count="振るサイコロの数（1〜100）", sides="サイコロの面数（1〜10000）")
+async def dice(interaction: discord.Interaction, count: int, sides: int):
+    if not (1 <= count <= 100):
+        await interaction.response.send_message("⚠️ サイコロの数は1〜100個にしてください。", ephemeral=True)
+        return
+    if not (1 <= sides <= 10000):
+        await interaction.response.send_message("⚠️ 面の数は1〜10000にしてください。", ephemeral=True)
         return
 
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    author = f"{message.author.name}#{message.author.discriminator}"
+    rolls = [random.randint(1, sides) for _ in range(count)]
+    total = sum(rolls)
+    rolls_str = ', '.join(str(r) for r in rolls)
 
-    if isinstance(message.channel, discord.TextChannel):
-        channel_name = f"#{message.channel.name}"
-    elif isinstance(message.channel, discord.DMChannel):
-        channel_name = "📩 DM"
-    elif isinstance(message.channel, discord.Thread):
-        channel_name = f"🧵 {message.channel.name}"
-    else:
-        channel_name = str(message.channel)
+    await interaction.response.send_message(
+        f"🎲 {sides}面ダイスを{count}個振りました！\n"
+        f"出目: [{rolls_str}]\n合計: **{total}**"
+    )
 
-    print(f"\033[92m[{timestamp}]\033[0m \033[96m{author}\033[0m in \033[93m{channel_name}\033[0m: {message.content}")
-    logging.info(f"[UserMessage] {timestamp} {author} in {channel_name}: {message.content}")
-
-    # ダイス判定
-    dice_match = re.fullmatch(r"!([1-9][0-9]*)d([1-9][0-9]*)", message.content.strip())
-    if dice_match:
-        count = int(dice_match.group(1))
-        sides = int(dice_match.group(2))
-
-        if not (1 <= count <= 100):
-            await message.channel.send("⚠️ サイコロの数は1〜100個にしてください。")
-            return
-        if not (1 <= sides <= 10000):
-            await message.channel.send("⚠️ 面の数は1〜10000にしてください。")
-            return
-
-        rolls = [random.randint(1, sides) for _ in range(count)]
-        total = sum(rolls)
-        rolls_str = ', '.join(str(r) for r in rolls)
-
-        await message.channel.send(
-            f"🎲 {sides}面ダイスを{count}個振りました！\n"
-            f"出目: [{rolls_str}]\n合計: **{total}**"
-        )
-        return
-
-    await bot.process_commands(message)
-
-# --- ステータスコマンド ---
-@bot.command()
-async def status(ctx):
+# --- ステータスコマンド（スラッシュ） ---
+@bot.tree.command(name="status", description="Botの応答速度やリソース情報を表示します")
+async def status(interaction: discord.Interaction):
     start_time = discord.utils.utcnow()
-    msg = await ctx.send("📊 ステータスを測定中...")
+    msg = await interaction.response.send_message("📊 ステータスを測定中...", ephemeral=True)
     end_time = discord.utils.utcnow()
     api_latency = (end_time - start_time).total_seconds() * 1000
     websocket_latency = bot.latency * 1000
@@ -150,8 +134,9 @@ async def status(ctx):
     embed.add_field(name="⏱ Uptime（稼働時間）", value=uptime_str, inline=False)
     embed.set_footer(text=f"{bot.user.name} | ステータス情報")
 
-    await msg.edit(content=None, embed=embed)
-
+    # interaction.response.send_messageは1回しか呼べないためeditで送る場合はfollowupを使う必要があるが
+    # 今回は即時返信にembedを乗せて終了するので問題なし
+    await interaction.edit_original_response(embed=embed)
 
 # --- 終了ログ ---
 def on_exit():
@@ -159,20 +144,15 @@ def on_exit():
 atexit.register(on_exit)
 
 # --- 起動処理 ---
-import os
-import logging
-from dotenv import load_dotenv
-
 async def main():
     load_dotenv()
 
     TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-    
-    if TOKEN:  # ← 修正
-        print("✅ トークンを読み込みました:", TOKEN[:10], "...")
-    else:
+    if not TOKEN:
         print("❌ トークンが読み込めませんでした。")
-        return  # トークンがない場合はここで終了した方が安全
+        return
+
+    print("✅ トークンを読み込みました:", TOKEN[:10] + "...")
 
     async with bot:
         try:
@@ -180,8 +160,9 @@ async def main():
             await bot.load_extension("music_youtube")
             await bot.load_extension("host_info")
         except Exception as e:
-            logging.error(f"拡張の読み込みに失敗: {e}")
+            logging.error(f"拡張の読み込みに失敗しました: {e}")
         await bot.start(TOKEN)
+
 
 if __name__ == "__main__":
     try:

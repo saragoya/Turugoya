@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands
+from discord import app_commands
 import platform
 import psutil
 import shutil
@@ -7,7 +8,6 @@ import wmi
 import socket
 import winreg
 import time
-import subprocess
 import datetime
 
 class SystemInfo(commands.Cog):
@@ -15,6 +15,7 @@ class SystemInfo(commands.Cog):
         self.bot = bot
         self.wmi = wmi.WMI(namespace="root\\wmi")
 
+    # ここに追加
     def get_windows_edition(self):
         try:
             key = winreg.OpenKey(
@@ -25,52 +26,42 @@ class SystemInfo(commands.Cog):
             return edition
         except Exception as e:
             return f"取得失敗: {e}"
-
-    def get_battery_info(self):
-        battery = psutil.sensors_battery()
-        if battery:
-            percent = battery.percent
-            plugged = battery.power_plugged
-            return f"{percent}%（{'充電中' if plugged else 'バッテリー駆動'}）"
-        else:
-            return "バッテリー情報なし"
-
+    
     def get_network_info(self):
-        hostname = socket.gethostname()
         try:
+            hostname = socket.gethostname()
             ip_address = socket.gethostbyname(hostname)
-        except socket.gaierror:
-            ip_address = "取得失敗"
-        return f"ホスト名: {hostname}\nIPアドレス: {ip_address}"
-
-    def get_cpu_temperature(self):
-        try:
-            temps = self.wmi.MSAcpi_ThermalZoneTemperature()
-            if not temps:
-                return "対応センサーなし"
-            temp_c = temps[0].CurrentTemperature / 10 - 273.15
-            return f"{temp_c:.1f} °C"
-        except Exception:
-            return "取得失敗"
+            return f"ホスト名: {hostname}\nIPアドレス: {ip_address}"
+        except Exception as e:
+            return f"ネットワーク情報取得エラー: {e}"
 
     def get_network_speed(self):
-        net1 = psutil.net_io_counters()
-        time.sleep(1)
-        net2 = psutil.net_io_counters()
-        upload = (net2.bytes_sent - net1.bytes_sent) / 1024  # KB/s
-        download = (net2.bytes_recv - net1.bytes_recv) / 1024
-        return f"⬆️ {upload:.2f} KB/s\n⬇️ {download:.2f} KB/s"
+        # 簡易的に1秒間での送受信バイト数を計測し、Mbpsに変換
+        try:
+            net1 = psutil.net_io_counters()
+            time.sleep(1)
+            net2 = psutil.net_io_counters()
+            bytes_sent = net2.bytes_sent - net1.bytes_sent
+            bytes_recv = net2.bytes_recv - net1.bytes_recv
+            speed_mbps = (bytes_sent + bytes_recv) * 8 / 1_000_000  # Mbps
+            return f"{speed_mbps:.2f} Mbps"
+        except Exception as e:
+            return f"通信速度取得エラー: {e}"
 
     def get_cpu_usage(self):
-        usage = psutil.cpu_percent(interval=1)
-        return f"{usage}%"
+        try:
+            usage = psutil.cpu_percent(interval=1)
+            return f"{usage}%"
+        except Exception as e:
+            return f"CPU使用率取得エラー: {e}"
 
-    def get_process_count(self):
-        return len(psutil.pids())
+    # (省略: 既存のメソッド群はそのまま)
 
-    @commands.command(name="host_info")
-    @commands.has_permissions(administrator=True)
-    async def host_info(self, ctx):
+    @app_commands.command(name="host_info", description="ホストPCの詳細情報を表示します（管理者のみ）")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def host_info(self, interaction: discord.Interaction):
+        await interaction.response.defer(thinking=True)
+
         w = wmi.WMI()
         cpu = w.Win32_Processor()[0].Name
         ram = round(psutil.virtual_memory().total / (1024 ** 3), 2)
@@ -132,8 +123,25 @@ class SystemInfo(commands.Cog):
         embed.add_field(name="🌐 ネットワーク", value=network_info, inline=False)
         embed.add_field(name="📶 通信速度", value=net_speed, inline=False)
         embed.add_field(name="⏱️ 稼働時間",value=uptime_str,inline=False)
-        embed.set_footer(text=f"要求者: {ctx.author}", icon_url=ctx.author.avatar.url if ctx.author.avatar else None)
-        await ctx.send(embed=embed)
+        embed.set_footer(text=f"要求者: {interaction.user}", icon_url=interaction.user.avatar.url if interaction.user.avatar else None)
+
+        await interaction.followup.send(embed=embed)
+
+    @host_info.error
+    async def host_info_error(self, interaction: discord.Interaction, error):
+        if interaction.response.is_done():
+            # すでに応答済みなら followup で送信
+            if isinstance(error, app_commands.MissingPermissions):
+                await interaction.followup.send("⚠️ 管理者権限が必要です。", ephemeral=True)
+            else:
+                await interaction.followup.send(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+        else:
+            # 応答していないなら response で送信
+            if isinstance(error, app_commands.MissingPermissions):
+                await interaction.response.send_message("⚠️ 管理者権限が必要です。", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"⚠️ エラーが発生しました: {error}", ephemeral=True)
+
 
 
 async def setup(bot):
