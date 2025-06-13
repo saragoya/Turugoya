@@ -20,5 +20,5 @@
 /volume 音量(0.0~2.0)   
 /repeat   
 /host_info   
-/status
+/status   
 /bot_help
