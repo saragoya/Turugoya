@@ -53,7 +53,7 @@ class YouTubeMusic(commands.Cog):
                 audio_source = discord.FFmpegPCMAudio(url)
             else:
                 with yt_dlp.YoutubeDL({'format': 'bestaudio'}) as ydl:
-                    info = await extract_info_async(ydl, url)
+                    info = await self.extract_info_async(ydl, url)
                     audio_url = info["url"]
                     audio_source = discord.FFmpegPCMAudio(audio_url)
 
@@ -93,8 +93,8 @@ class YouTubeMusic(commands.Cog):
             if state["queue"]:
                 state["queue"].pop(0)
             await self.play_next(guild_id)
-
-
+        
+        asyncio.create_task(self.auto_disconnect(guild_id, delay=300))
 
     @app_commands.command(name="play", description="YouTubeのURLを再生キューに追加して再生します")
     @app_commands.describe(url="再生したいYouTubeのURL")
