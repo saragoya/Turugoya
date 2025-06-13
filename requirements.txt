@@ -1,2 +1,5 @@
 discord.py>=2.3.0
 yt-dlp>=2024.4.9
+psutil>=5.9.0
+pywin32>=306
+wmi>=1.5.1
